@@ -5,17 +5,13 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.BaseAdapter;
-import android.widget.ImageView;
 import android.widget.TextView;
 
 import com.xiaoai.hlv.R;
 
-public class AdapterMain extends AdapterHListView {
+public class AdapterMain extends BaseAdapter {
 
 	private Context mContext;
-
-	private static final int[] COLORS = new int[] { android.R.color.white,
-			android.R.color.black };
 
 	public AdapterMain(Context context) {
 		this.mContext = context;
@@ -38,12 +34,10 @@ public class AdapterMain extends AdapterHListView {
 
 	@Override
 	public View getView(int position, View convertView, ViewGroup parent) {
-		super.getView(position, convertView, parent);
 		if (convertView == null) {
 			convertView = LayoutInflater.from(mContext).inflate(R.layout.list_item, null);
 		}
 		TextView img = (TextView) convertView.findViewById(R.id.img);
-//		img.setBackgroundColor(COLORS[position % COLORS.length]);
 		img.setText("" + position);
 		return convertView;
 	}

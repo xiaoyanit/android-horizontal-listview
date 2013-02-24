@@ -30,57 +30,43 @@ package com.xiaoai.hlv.widget;
 import java.util.LinkedList;
 import java.util.Queue;
 
-import com.xiaoai.hlv.adapter.AdapterHListView;
-
 import android.annotation.SuppressLint;
 import android.content.Context;
 import android.database.DataSetObserver;
 import android.graphics.PointF;
 import android.graphics.Rect;
-import android.graphics.drawable.Drawable;
-import android.graphics.drawable.TransitionDrawable;
-import android.os.Debug;
-import android.os.Handler;
 import android.util.AttributeSet;
-import android.util.Log;
 import android.view.GestureDetector;
 import android.view.GestureDetector.OnGestureListener;
-import android.view.View.MeasureSpec;
-import android.view.ViewGroup.LayoutParams;
 import android.view.MotionEvent;
-import android.view.VelocityTracker;
 import android.view.View;
-import android.view.ViewConfiguration;
-import android.view.ViewGroup;
-import android.widget.AbsListView;
-import android.widget.Adapter;
 import android.widget.AdapterView;
 import android.widget.ListAdapter;
 import android.widget.Scroller;
-import android.widget.Toast;
-import android.widget.AbsListView.OnScrollListener;
-import android.widget.AdapterView.OnItemClickListener;
-import android.widget.AdapterView.OnItemLongClickListener;
-import android.widget.AdapterView.OnItemSelectedListener;
 
 public class HorizontalListView extends AdapterView<ListAdapter> {
+
+	private int mCurrentX;
+	private int mNextX;
+	private int mLeftViewIndex = -1;
+	private int mRightViewIndex = 0;
+	private int mDisplayOffset = 0;
+	private int mMaxX = Integer.MAX_VALUE;
 
 	private float mInitialX;
 	private float mInitialY;
 
 	public boolean mAlwaysOverrideTouch = true;
+	private boolean mDataChanged;
+	private boolean isLoading; // 是否正在加载
+	private boolean isTouchUp;
 
-	protected ListAdapter mAdapter;
+	private ListAdapter mAdapter;
 
-	private int mLeftViewIndex = -1;
-	private int mRightViewIndex = 0;
-	protected int mCurrentX;
-	protected int mNextX;
-	private int mMaxX = Integer.MAX_VALUE;
-	private int mDisplayOffset = 0;
-
-	protected Scroller mScroller;
+	private Scroller mScroller;
 	private GestureDetector mGesture;
+
+	private PointF touchPoint = new PointF();
 
 	private Queue<View> mRemovedViewQueue = new LinkedList<View>();
 
@@ -88,22 +74,15 @@ public class HorizontalListView extends AdapterView<ListAdapter> {
 	private OnItemClickListener mOnItemClicked;
 	private OnItemLongClickListener mOnItemLongClicked;
 
-	private boolean mDataChanged = false;
-
-	private MyOnScrollListener onScrollListener;// 设置滑动监听事件
-
-	private static final int FLING_MIN_DISTANCE = 50;
-	private static final int FLING_MIN_VELOCITY = 0;
-
-	private boolean isLoading = false;// true表示正在加载,false表示没有加载可以开线程加载
+	private IItemVisibleListener itemListener; // 设置滑动监听事件
 
 	public HorizontalListView(Context context, AttributeSet attrs) {
 		super(context, attrs);
 		initView();
 	}
 
-	public void setIOnScrollListener(MyOnScrollListener onScrollListener) {
-		this.onScrollListener = onScrollListener;
+	public void setOnScrollListener(IItemVisibleListener itemListener) {
+		this.itemListener = itemListener;
 	}
 
 	private synchronized void initView() {
@@ -118,19 +97,17 @@ public class HorizontalListView extends AdapterView<ListAdapter> {
 	}
 
 	@Override
-	public void setOnItemSelectedListener(
-			AdapterView.OnItemSelectedListener listener) {
+	public void setOnItemSelectedListener(OnItemSelectedListener listener) {
 		mOnItemSelected = listener;
 	}
 
 	@Override
-	public void setOnItemClickListener(AdapterView.OnItemClickListener listener) {
+	public void setOnItemClickListener(OnItemClickListener listener) {
 		mOnItemClicked = listener;
 	}
 
 	@Override
-	public void setOnItemLongClickListener(
-			AdapterView.OnItemLongClickListener listener) {
+	public void setOnItemLongClickListener(OnItemLongClickListener listener) {
 		mOnItemLongClicked = listener;
 	}
 
@@ -152,26 +129,7 @@ public class HorizontalListView extends AdapterView<ListAdapter> {
 			invalidate();
 			requestLayout();
 		}
-
 	};
-
-	// 解决点击事件处理不正确Bug
-	@Override
-	public boolean onInterceptTouchEvent(MotionEvent ev) {
-		switch (ev.getAction() & MotionEvent.ACTION_MASK) {
-		case MotionEvent.ACTION_DOWN:
-			mInitialX = ev.getX();
-			mInitialY = ev.getY();
-			return false;
-		case MotionEvent.ACTION_MOVE:
-			float deltaX = Math.abs(ev.getX() - mInitialX);
-			float deltaY = Math.abs(ev.getY() - mInitialY);
-			return (deltaX > 10 || deltaY > 10);
-		default:
-			return super.onInterceptTouchEvent(ev);
-		}
-	}
-	
 
 	@Override
 	public ListAdapter getAdapter() {
@@ -201,10 +159,11 @@ public class HorizontalListView extends AdapterView<ListAdapter> {
 
 	@Override
 	public void setSelection(int position) {
+
 	}
 
 	private void addAndMeasureChild(final View child, int viewPos) {
-		AdapterView.LayoutParams params = child.getLayoutParams();
+		LayoutParams params = child.getLayoutParams();
 		if (params == null) {
 			params = new LayoutParams(LayoutParams.FILL_PARENT,
 					LayoutParams.FILL_PARENT);
@@ -216,6 +175,7 @@ public class HorizontalListView extends AdapterView<ListAdapter> {
 				MeasureSpec.makeMeasureSpec(getHeight(), MeasureSpec.EXACTLY));
 	}
 
+	@SuppressLint("DrawAllocation")
 	@Override
 	protected synchronized void onLayout(boolean changed, int left, int top,
 			int right, int bottom) {
@@ -257,34 +217,24 @@ public class HorizontalListView extends AdapterView<ListAdapter> {
 
 		if (!mScroller.isFinished()) {
 			post(new Runnable() {
+
 				@Override
 				public void run() {
 					requestLayout();
 				}
 			});
-
 		}
-		
-		if (mScroller.isFinished() && isUp) {
-			if (!isLoading && mAdapter != null) {
-				android.util.Log.e("test",
-						"getLastPosition: " + ((AdapterHListView) mAdapter).getLastPosition());
-				if (mAdapter instanceof AdapterHListView
-						&& ((AdapterHListView) mAdapter)
-								.getLastPosition() == mAdapter
-								.getCount() - 1) {
-					android.util.Log.e("test",
-							"********* load more");
-					if (onScrollListener != null) {
-						isLoading = true;// 设置正在加载,不用加载了!
-						onScrollListener.loadMore();
-					}
+
+		if (mScroller.isFinished() && !isLoading && isTouchUp) {
+			if (mAdapter != null && mRightViewIndex == mAdapter.getCount()) {
+				android.util.Log.e("test", "*****load more");
+				if (itemListener != null) {
+					isLoading = true; // 设置正在加载
+					itemListener.loadMore();
 				}
 			}
 		}
 	}
-	
-	private boolean isUp;
 
 	private void fillList(final int dx) {
 		int edge = 0;
@@ -300,7 +250,6 @@ public class HorizontalListView extends AdapterView<ListAdapter> {
 			edge = child.getLeft();
 		}
 		fillListLeft(edge, dx);
-
 	}
 
 	private void fillListRight(int rightEdge, final int dx) {
@@ -342,7 +291,6 @@ public class HorizontalListView extends AdapterView<ListAdapter> {
 			removeViewInLayout(child);
 			mLeftViewIndex++;
 			child = getChildAt(0);
-
 		}
 
 		child = getChildAt(getChildCount() - 1);
@@ -374,22 +322,37 @@ public class HorizontalListView extends AdapterView<ListAdapter> {
 	}
 
 	@Override
-	public boolean onTouchEvent(MotionEvent event) {
-		// TODO Auto-generated method stub
-		if (event.getAction() == MotionEvent.ACTION_DOWN) {
-			isUp = false;
-		}
-		if (event.getAction() == MotionEvent.ACTION_UP) {
-			isUp = true;
-		}
-		return super.onTouchEvent(event);
-	}
-	
-	@Override
 	public boolean dispatchTouchEvent(MotionEvent ev) {
+		switch (ev.getAction()) {
+		case MotionEvent.ACTION_DOWN:
+			isTouchUp = false;
+			break;
+		case MotionEvent.ACTION_UP:
+			isTouchUp = true;
+			break;
+		default:
+			break;
+		}
 		boolean handled = super.dispatchTouchEvent(ev);
 		handled |= mGesture.onTouchEvent(ev);
 		return handled;
+	}
+
+	// 解决点击事件处理不正确Bug
+	@Override
+	public boolean onInterceptTouchEvent(MotionEvent ev) {
+		switch (ev.getAction() & MotionEvent.ACTION_MASK) {
+		case MotionEvent.ACTION_DOWN:
+			mInitialX = ev.getX();
+			mInitialY = ev.getY();
+			return false;
+		case MotionEvent.ACTION_MOVE:
+			float deltaX = Math.abs(ev.getX() - mInitialX);
+			float deltaY = Math.abs(ev.getY() - mInitialY);
+			return (deltaX > 10 || deltaY > 10);
+		default:
+			return super.onInterceptTouchEvent(ev);
+		}
 	}
 
 	protected boolean onFling(MotionEvent e1, MotionEvent e2, float velocityX,
@@ -400,16 +363,11 @@ public class HorizontalListView extends AdapterView<ListAdapter> {
 		requestLayout();
 		return true;
 	}
-	
-	
+
 	protected boolean onDown(MotionEvent e) {
 		mScroller.forceFinished(true);
 		return true;
 	}
-	
-	
-	
-	private PointF touchPoint = new PointF();
 
 	private OnGestureListener mOnGesture = new GestureDetector.SimpleOnGestureListener() {
 
@@ -418,7 +376,7 @@ public class HorizontalListView extends AdapterView<ListAdapter> {
 			touchPoint.set(e.getRawX(), e.getRawY());
 			return HorizontalListView.this.onDown(e);
 		}
-		
+
 		@Override
 		public boolean onFling(MotionEvent e1, MotionEvent e2, float velocityX,
 				float velocityY) {
@@ -429,16 +387,12 @@ public class HorizontalListView extends AdapterView<ListAdapter> {
 		@Override
 		public boolean onScroll(MotionEvent e1, MotionEvent e2,
 				float distanceX, float distanceY) {
-//			Log.e("test", "scrollX: " + getScrollX() + ", scrollY: " + getScrollY());
-//			Log.e("test", "e1: " + e1.getX() + ", e2: " + e2.getX() + ", distanceX: " +
-//					distanceX + ", distanceY: " + distanceY);
 			synchronized (HorizontalListView.this) {
-				// mNextX += (int) distanceX;
 				mNextX += (int) (touchPoint.x - e2.getRawX());
 			}
 			touchPoint.set(e2.getRawX(), e2.getRawY());
 			requestLayout();
-			
+
 			return true;
 		}
 
@@ -459,7 +413,6 @@ public class HorizontalListView extends AdapterView<ListAdapter> {
 					}
 					break;
 				}
-
 			}
 			return false;
 		}
@@ -478,7 +431,6 @@ public class HorizontalListView extends AdapterView<ListAdapter> {
 					}
 					break;
 				}
-
 			}
 		}
 
@@ -495,16 +447,8 @@ public class HorizontalListView extends AdapterView<ListAdapter> {
 		}
 	};
 
-	public interface MyOnScrollListener {
+	public interface IItemVisibleListener {
+
 		public void loadMore();
 	}
-
-	public boolean isLoading() {
-		return isLoading;
-	}
-
-	public void setLoading(boolean isLoading) {
-		this.isLoading = isLoading;
-	}
-
 }

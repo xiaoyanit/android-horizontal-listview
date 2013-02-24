@@ -5,9 +5,6 @@ import com.xiaoai.hlv.widget.HorizontalListView;
 
 import android.os.Bundle;
 import android.app.Activity;
-import android.view.Menu;
-import android.widget.AbsListView;
-import android.widget.ListView;
 
 public class MainActivity extends Activity {
 
@@ -22,7 +19,6 @@ public class MainActivity extends Activity {
 		hlv = (HorizontalListView) findViewById(R.id.hlv);
 		mAdapter = new AdapterMain(this);
 		hlv.setAdapter(mAdapter);
-		ListView txt = new ListView(this);
 	}
 
 }
